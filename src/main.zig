@@ -5,6 +5,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const math = std.math;
+const gui = @import("gui.zig");
 
 const SAMPLE_RATE: u32 = 48000;
 const SAMPLE_DURATION: f32 = 1.0 / @as(f32, @floatFromInt(SAMPLE_RATE));
@@ -78,10 +79,10 @@ const EnvelopeStage = enum {
 
 const Envelope = struct {
     stage: EnvelopeStage = .idle,
-    attack_time: f32 = 0.1, // seconds
-    decay_time: f32 = 0.1, // seconds
-    sustain_level: f32 = 0.7, // 0.0 to 1.0
-    release_time: f32 = 0.2, // seconds
+    attack_time: f32 = 0.5, // seconds
+    decay_time: f32 = 2.5, // seconds
+    sustain_level: f32 = 0.6, // 0.0 to 1.0
+    release_time: f32 = 2, // seconds
 
     current_level: f32 = 0.0,
     stage_time: f32 = 0.0,
@@ -213,14 +214,16 @@ fn PolyOscillator(comptime voice_count: comptime_int) type {
             }
         }
 
-        // Optional: find next free voice or oldest voice
-        // Modified findVoice method
         pub fn findVoice(self: *@This()) usize {
-            // First try to find an idle voice
+            // First try to find an idle voice (envelope completely finished)
+            for (self.oscillators, 0..) |osc, i| {
+                if (osc.envelope.stage == .idle) return i;
+            }
+            // If no completely idle voices, look for ones that aren't actively playing
             for (self.oscillators, 0..) |osc, i| {
                 if (!osc.is_playing) return i;
             }
-            // If all voices are playing, use round-robin
+            // If all voices are active, use round-robin
             const voice = self.next_voice;
             self.next_voice = (self.next_voice + 1) % voice_count;
             return voice;
@@ -280,6 +283,38 @@ fn PolyOscillator(comptime voice_count: comptime_int) type {
         }
     };
 }
+
+var attack_knob = gui.Knob{
+    .x = 50,
+    .y = 100,
+    .radius = 20,
+    .value = 0.1,
+    .label = "Attack",
+};
+
+var decay_knob = gui.Knob{
+    .x = 150,
+    .y = 100,
+    .radius = 20,
+    .value = 0.1,
+    .label = "Decay",
+};
+
+var sustain_knob = gui.Knob{
+    .x = 250,
+    .y = 100,
+    .radius = 20,
+    .value = 0.7,
+    .label = "Sustain",
+};
+
+var release_knob = gui.Knob{
+    .x = 350,
+    .y = 100,
+    .radius = 20,
+    .value = 0.2,
+    .label = "Release",
+};
 
 fn audioInputCallback(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     var samples: [*]f32 = @alignCast(@ptrCast(buffer.?));
@@ -344,9 +379,29 @@ pub fn main() void {
             }
         }
 
+        // Update controls
+        attack_knob.update();
+        decay_knob.update();
+        sustain_knob.update();
+        release_knob.update();
+
+        // Update envelope parameters
+        for (&global_poly.oscillators) |*osc| {
+            osc.envelope.attack_time = attack_knob.value * 2.0; // 0-2 seconds
+            osc.envelope.decay_time = decay_knob.value * 1.0; // 0-1 seconds
+            osc.envelope.sustain_level = sustain_knob.value; // 0-1
+            osc.envelope.release_time = release_knob.value * 3.0; // 0-3 seconds
+        }
+
         rl.beginDrawing();
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.black);
+
+        // Draw controls
+        attack_knob.draw();
+        decay_knob.draw();
+        sustain_knob.draw();
+        release_knob.draw();
     }
 }
