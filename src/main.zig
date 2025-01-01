@@ -45,6 +45,10 @@ fn getKeyNote(key: rl.KeyboardKey) ?usize {
     };
 }
 
+const NOTE_KEYS = [_]rl.KeyboardKey{
+    .z, .s, .x, .d, .c, .v, .g, .b, .h, .n, .j, .m, .comma,
+};
+
 const WaveForm = enum {
     sine,
     square,
@@ -52,10 +56,105 @@ const WaveForm = enum {
     triangle,
 };
 
+const WAVEFORM_CONTROLS = struct {
+    key: rl.KeyboardKey,
+    waveform: WaveForm,
+};
+
+const WAVEFORM_KEYS = [_]WAVEFORM_CONTROLS{
+    .{ .key = .q, .waveform = .sine },
+    .{ .key = .w, .waveform = .square },
+    .{ .key = .e, .waveform = .sawtooth },
+    .{ .key = .r, .waveform = .triangle },
+};
+
+const EnvelopeStage = enum {
+    idle,
+    attack,
+    decay,
+    sustain,
+    release,
+};
+
+const Envelope = struct {
+    stage: EnvelopeStage = .idle,
+    attack_time: f32 = 0.1, // seconds
+    decay_time: f32 = 0.1, // seconds
+    sustain_level: f32 = 0.7, // 0.0 to 1.0
+    release_time: f32 = 0.2, // seconds
+
+    current_level: f32 = 0.0,
+    stage_time: f32 = 0.0,
+
+    pub fn trigger(self: *Envelope) void {
+        self.stage = .attack;
+        self.stage_time = 0;
+    }
+
+    pub fn release(self: *Envelope) void {
+        if (self.stage != .idle) {
+            self.stage = .release;
+            self.stage_time = 0;
+        }
+    }
+
+    pub fn process(self: *Envelope) f32 {
+        self.stage_time += SAMPLE_DURATION;
+
+        switch (self.stage) {
+            .idle => {
+                self.current_level = 0;
+            },
+            .attack => {
+                self.current_level = self.stage_time / self.attack_time;
+                if (self.current_level >= 1.0) {
+                    self.current_level = 1.0;
+                    self.stage = .decay;
+                    self.stage_time = 0;
+                }
+            },
+            .decay => {
+                const decay_progress = self.stage_time / self.decay_time;
+                self.current_level = 1.0 + (self.sustain_level - 1.0) * decay_progress;
+                if (decay_progress >= 1.0) {
+                    self.current_level = self.sustain_level;
+                    self.stage = .sustain;
+                }
+            },
+            .sustain => {
+                self.current_level = self.sustain_level;
+            },
+            .release => {
+                const release_progress = self.stage_time / self.release_time;
+                self.current_level = self.sustain_level * (1.0 - release_progress);
+                if (release_progress >= 1.0) {
+                    self.current_level = 0;
+                    self.stage = .idle;
+                }
+            },
+        }
+
+        return self.current_level;
+    }
+};
+
 const Oscillator = struct {
     frequency: f32,
     phase: f32,
     waveform: WaveForm = .sine,
+    envelope: Envelope = .{},
+    is_playing: bool = false,
+
+    pub fn noteOn(self: *Oscillator, freq: f32) void {
+        self.frequency = freq;
+        self.is_playing = true;
+        self.envelope.trigger();
+    }
+
+    pub fn noteOff(self: *Oscillator) void {
+        self.is_playing = false;
+        self.envelope.release();
+    }
 
     pub fn getSample(self: *Oscillator) f32 {
         var sample: f32 = undefined;
@@ -84,13 +183,15 @@ const Oscillator = struct {
         // Wrap phase precisely between 0 and 1
         self.phase = self.phase - @floor(self.phase);
 
-        return sample;
+        // Multiple by our envelope to get correct amplitude
+        return sample * self.envelope.process();
     }
 };
 
 fn PolyOscillator(comptime voice_count: comptime_int) type {
     return struct {
         oscillators: [voice_count]Oscillator = undefined,
+        next_voice: usize = 0,
 
         pub fn initOSC(self: *@This()) void {
             self.oscillators = [_]Oscillator{Oscillator{
@@ -98,6 +199,31 @@ fn PolyOscillator(comptime voice_count: comptime_int) type {
                 .phase = 0,
                 .waveform = .sine,
             }} ** voice_count;
+        }
+
+        pub fn noteOn(self: *@This(), voice: usize, frequency: f32) void {
+            if (voice < voice_count) {
+                self.oscillators[voice].noteOn(frequency);
+            }
+        }
+
+        pub fn noteOff(self: *@This(), voice: usize) void {
+            if (voice < voice_count) {
+                self.oscillators[voice].noteOff();
+            }
+        }
+
+        // Optional: find next free voice or oldest voice
+        // Modified findVoice method
+        pub fn findVoice(self: *@This()) usize {
+            // First try to find an idle voice
+            for (self.oscillators, 0..) |osc, i| {
+                if (!osc.is_playing) return i;
+            }
+            // If all voices are playing, use round-robin
+            const voice = self.next_voice;
+            self.next_voice = (self.next_voice + 1) % voice_count;
+            return voice;
         }
 
         // Add method to change waveform
@@ -186,75 +312,35 @@ pub fn main() void {
     rl.playAudioStream(stream);
 
     global_poly.initOSC();
-
-    const FREQ_CHANGE_RATE: f32 = 1.0; // Hz per frame
-    var selected_voice: usize = 0;
     var next_voice: usize = 0; // For round-robin voice allocation
+
+    // Which key is assigned to which voice
+    var key_voice_map: [256]?usize = .{null} ** 256;
 
     // Main loop
     while (!rl.windowShouldClose()) {
-        // Check for note key presses
-        for ([_]rl.KeyboardKey{
-            .z, .s, .x, .d, .c, .v, .g, .b, .h, .n, .j, .m, .comma,
-        }) |key| {
+        // Handle note input
+        for (NOTE_KEYS) |key| {
+            const key_idx = @as(usize, @intCast(@intFromEnum(key)));
+
             if (rl.isKeyPressed(key)) {
                 if (getKeyNote(key)) |note_idx| {
-                    // Assign note to next available voice (round-robin)
-                    global_poly.setFrequency(next_voice, NOTE_FREQUENCIES[note_idx]);
-                    next_voice = (next_voice + 1) % 4; // Assuming 4 voices
+                    const voice = global_poly.findVoice();
+                    global_poly.noteOn(voice, NOTE_FREQUENCIES[note_idx]);
+                    key_voice_map[key_idx] = voice;
+                    next_voice = (voice + 1) % NUMBER_OF_VOICES;
+                }
+            } else if (rl.isKeyReleased(key)) {
+                if (key_voice_map[key_idx]) |voice| {
+                    global_poly.noteOff(voice);
+                    key_voice_map[key_idx] = null;
                 }
             }
         }
-
-        // Adjust all frequencies
-        if (rl.isKeyDown(rl.KeyboardKey.up)) {
-            global_poly.adjustFrequencies(FREQ_CHANGE_RATE);
-        }
-        if (rl.isKeyDown(rl.KeyboardKey.down)) {
-            global_poly.adjustFrequencies(-FREQ_CHANGE_RATE);
-        }
-
-        // Select voice
-        if (rl.isKeyPressed(rl.KeyboardKey.one)) selected_voice = 0;
-        if (rl.isKeyPressed(rl.KeyboardKey.two)) selected_voice = 1;
-        if (rl.isKeyPressed(rl.KeyboardKey.three)) selected_voice = 2;
-        if (rl.isKeyPressed(rl.KeyboardKey.four)) selected_voice = 3;
-
-        // Adjust individual voice frequency
-        if (rl.isKeyDown(rl.KeyboardKey.right)) {
-            global_poly.adjustFrequency(selected_voice, FREQ_CHANGE_RATE);
-        }
-        if (rl.isKeyDown(rl.KeyboardKey.left)) {
-            global_poly.adjustFrequency(selected_voice, -FREQ_CHANGE_RATE);
-        }
-
-        // Set selected voice to waveform
-        if (rl.isKeyPressed(rl.KeyboardKey.s)) {
-            global_poly.setWaveform(selected_voice, .sine);
-        }
-        if (rl.isKeyPressed(rl.KeyboardKey.q)) {
-            global_poly.setWaveform(selected_voice, .square);
-        }
-        if (rl.isKeyPressed(rl.KeyboardKey.w)) {
-            global_poly.setWaveform(selected_voice, .sawtooth);
-        }
-        if (rl.isKeyPressed(rl.KeyboardKey.t)) {
-            global_poly.setWaveform(selected_voice, .triangle);
-        }
-
-        // Set all voices to same waveform with Shift key
-        if (rl.isKeyDown(rl.KeyboardKey.left_shift)) {
-            if (rl.isKeyPressed(rl.KeyboardKey.s)) {
-                global_poly.setAllWaveforms(.sine);
-            }
-            if (rl.isKeyPressed(rl.KeyboardKey.q)) {
-                global_poly.setAllWaveforms(.square);
-            }
-            if (rl.isKeyPressed(rl.KeyboardKey.w)) {
-                global_poly.setAllWaveforms(.sawtooth);
-            }
-            if (rl.isKeyPressed(rl.KeyboardKey.t)) {
-                global_poly.setAllWaveforms(.triangle);
+        // Handle waveform changes
+        for (WAVEFORM_KEYS) |control| {
+            if (rl.isKeyPressed(control.key)) {
+                global_poly.setAllWaveforms(control.waveform);
             }
         }
 
