@@ -2,6 +2,7 @@
 // PROPER GUI
 // VIBRATO
 // MIDI IN
+// NOISE OSC
 
 const std = @import("std");
 const rl = @import("raylib");

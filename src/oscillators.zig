@@ -165,31 +165,31 @@ pub fn PolyOscillator(comptime voice_count: comptime_int) type {
 
         pub fn setAttack(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.envelope.attack_time = data.mapToRange(value, data.ENV.ATTACK_MIN, data.ENV.ATTACK_MAX);
+                osc.envelope.attack_time = data.mapToRangeCurve(value, data.ENV.ATTACK_MIN, data.ENV.ATTACK_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setDecay(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.envelope.decay_time = data.mapToRange(value, data.ENV.DECAY_MIN, data.ENV.DECAY_MAX);
+                osc.envelope.decay_time = data.mapToRangeCurve(value, data.ENV.DECAY_MIN, data.ENV.DECAY_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setSustain(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.envelope.sustain_level = data.mapToRange(value, data.ENV.SUSTAIN_MIN, data.ENV.SUSTAIN_MAX);
+                osc.envelope.sustain_level = data.mapToRangeCurve(value, data.ENV.SUSTAIN_MIN, data.ENV.SUSTAIN_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setRelease(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.envelope.release_time = data.mapToRange(value, data.ENV.RELEASE_MIN, data.ENV.RELEASE_MAX);
+                osc.envelope.release_time = data.mapToRangeCurve(value, data.ENV.RELEASE_MIN, data.ENV.RELEASE_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setFilterCutoff(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.filter.setCutoff(data.mapToRange(value, data.FILTER.CUTOFF_MIN, data.FILTER.CUTOFF_MAX));
+                osc.filter.setCutoff(data.mapToRangeCurve(value, data.FILTER.CUTOFF_MIN, data.FILTER.CUTOFF_MAX, data.CURVE_EXPONENT_DEFAULT));
             }
         }
 
@@ -207,25 +207,25 @@ pub fn PolyOscillator(comptime voice_count: comptime_int) type {
 
         pub fn setFilterAttack(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.filter.envelope.attack_time = data.mapToRange(value, data.ENV.ATTACK_MIN, data.ENV.ATTACK_MAX);
+                osc.filter.envelope.attack_time = data.mapToRangeCurve(value, data.ENV.ATTACK_MIN, data.ENV.ATTACK_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setFilterDecay(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.filter.envelope.decay_time = data.mapToRange(value, data.ENV.DECAY_MIN, data.ENV.DECAY_MAX);
+                osc.filter.envelope.decay_time = data.mapToRangeCurve(value, data.ENV.DECAY_MIN, data.ENV.DECAY_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setFilterSustain(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.filter.envelope.sustain_level = data.mapToRange(value, data.ENV.SUSTAIN_MIN, data.ENV.SUSTAIN_MAX);
+                osc.filter.envelope.sustain_level = data.mapToRangeCurve(value, data.ENV.SUSTAIN_MIN, data.ENV.SUSTAIN_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
 
         pub fn setFilterRelease(self: *@This(), value: f32) void {
             for (&self.oscillators) |*osc| {
-                osc.filter.envelope.release_time = data.mapToRange(value, data.ENV.RELEASE_MIN, data.ENV.RELEASE_MAX);
+                osc.filter.envelope.release_time = data.mapToRangeCurve(value, data.ENV.RELEASE_MIN, data.ENV.RELEASE_MAX, data.CURVE_EXPONENT_DEFAULT);
             }
         }
     };

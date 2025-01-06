@@ -101,3 +101,10 @@ pub const MASTER = struct {
 pub fn mapToRange(value: f32, min: f32, max: f32) f32 {
     return min + (value * (max - min));
 }
+
+pub fn mapToRangeCurve(value: f32, min: f32, max: f32, exponent: f32) f32 {
+    const curved_value = std.math.pow(f32, value, exponent);
+    return min + (curved_value * (max - min));
+}
+
+pub const CURVE_EXPONENT_DEFAULT = 1.5;
