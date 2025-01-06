@@ -1,381 +1,342 @@
-// TODO
-// MIDI or keyboard in to play notes
-// ADSR
+// MORE VOICES WITH DETUNE
+// PROPER GUI
+// VIBRATO
+// MIDI IN
 
 const std = @import("std");
 const rl = @import("raylib");
 const math = std.math;
+
+const oscillators = @import("oscillators.zig");
 const gui = @import("gui.zig");
 
-const SAMPLE_RATE: u32 = 48000;
-const SAMPLE_DURATION: f32 = 1.0 / @as(f32, @floatFromInt(SAMPLE_RATE));
-const TWO_PI: f32 = 2.0 * math.pi;
+const data = @import("data.zig");
+const WaveForm = data.WaveForm;
+const SAMPLE_RATE = data.SAMPLE_RATE;
+const SAMPLE_DURATION = data.SAMPLE_DURATION;
+const TWO_PI = data.TWO_PI;
+const NOTE_KEYS = data.NOTE_KEYS;
+const getKeyNote = data.getKeyNote;
+const NOTE_FREQUENCIES = data.NOTE_FREQUENCIES;
 
-const NOTE_FREQUENCIES = [_]f32{
-    261.63, // C4
-    277.18, // C#4
-    293.66, // D4
-    311.13, // D#4
-    329.63, // E4
-    349.23, // F4
-    369.99, // F#4
-    392.00, // G4
-    415.30, // G#4
-    440.00, // A4
-    466.16, // A#4
-    493.88, // B4
-    523.25, // C5
+const KNOB_RADIUS = 20;
+const KNOB_SPACING_X = 100;
+const KNOB_GROUP_SPACING = 160;
+const OSC_SPACING_Y = 100;
+const BASE_X = 100;
+const BASE_Y = 50;
+
+var osc1_waveform_switch = gui.WaveformSelector{
+    .x = BASE_X / 2,
+    .y = BASE_Y,
+    .width = 120,
+    .height = 40,
+    .value = .sine,
+    .label = "OSC 1",
 };
 
-fn getKeyNote(key: rl.KeyboardKey) ?usize {
-    return switch (key) {
-        .z => 0, // C4
-        .s => 1, // C#4
-        .x => 2, // D4
-        .d => 3, // D#4
-        .c => 4, // E4
-        .v => 5, // F4
-        .g => 6, // F#4
-        .b => 7, // G4
-        .h => 8, // G#4
-        .n => 9, // A4
-        .j => 10, // A#4
-        .m => 11, // B4
-        .comma => 12, // C5
-        else => null,
-    };
-}
-
-const NOTE_KEYS = [_]rl.KeyboardKey{
-    .z, .s, .x, .d, .c, .v, .g, .b, .h, .n, .j, .m, .comma,
+var osc1_semitone_knob = gui.Knob{
+    .x = BASE_X + 140,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Semi 1",
 };
 
-const WaveForm = enum {
-    sine,
-    square,
-    sawtooth,
-    triangle,
+var osc1_fine_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Fine 1",
 };
 
-const WAVEFORM_CONTROLS = struct {
-    key: rl.KeyboardKey,
-    waveform: WaveForm,
+var osc1_volume_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 2,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.7,
+    .label = "Vol 1",
 };
 
-const WAVEFORM_KEYS = [_]WAVEFORM_CONTROLS{
-    .{ .key = .q, .waveform = .sine },
-    .{ .key = .w, .waveform = .square },
-    .{ .key = .e, .waveform = .sawtooth },
-    .{ .key = .r, .waveform = .triangle },
+var osc2_waveform_switch = gui.WaveformSelector{
+    .x = BASE_X / 2,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .width = 120,
+    .height = 40,
+    .value = .sine,
+    .label = "OSC 2",
 };
 
-const EnvelopeStage = enum {
-    idle,
-    attack,
-    decay,
-    sustain,
-    release,
+var osc2_semitone_knob = gui.Knob{
+    .x = BASE_X + 140,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Semi 2",
 };
 
-const Envelope = struct {
-    stage: EnvelopeStage = .idle,
-    attack_time: f32 = 0.5, // seconds
-    decay_time: f32 = 2.5, // seconds
-    sustain_level: f32 = 0.6, // 0.0 to 1.0
-    release_time: f32 = 2, // seconds
-
-    current_level: f32 = 0.0,
-    stage_time: f32 = 0.0,
-
-    pub fn trigger(self: *Envelope) void {
-        self.stage = .attack;
-        self.stage_time = 0;
-    }
-
-    pub fn release(self: *Envelope) void {
-        if (self.stage != .idle) {
-            self.stage = .release;
-            self.stage_time = 0;
-        }
-    }
-
-    pub fn process(self: *Envelope) f32 {
-        self.stage_time += SAMPLE_DURATION;
-
-        switch (self.stage) {
-            .idle => {
-                self.current_level = 0;
-            },
-            .attack => {
-                self.current_level = self.stage_time / self.attack_time;
-                if (self.current_level >= 1.0) {
-                    self.current_level = 1.0;
-                    self.stage = .decay;
-                    self.stage_time = 0;
-                }
-            },
-            .decay => {
-                const decay_progress = self.stage_time / self.decay_time;
-                self.current_level = 1.0 + (self.sustain_level - 1.0) * decay_progress;
-                if (decay_progress >= 1.0) {
-                    self.current_level = self.sustain_level;
-                    self.stage = .sustain;
-                }
-            },
-            .sustain => {
-                self.current_level = self.sustain_level;
-            },
-            .release => {
-                const release_progress = self.stage_time / self.release_time;
-                self.current_level = self.sustain_level * (1.0 - release_progress);
-                if (release_progress >= 1.0) {
-                    self.current_level = 0;
-                    self.stage = .idle;
-                }
-            },
-        }
-
-        return self.current_level;
-    }
+var osc2_fine_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Fine 2",
 };
 
-const Oscillator = struct {
-    frequency: f32,
-    phase: f32,
-    waveform: WaveForm = .sine,
-    envelope: Envelope = .{},
-    is_playing: bool = false,
-
-    pub fn noteOn(self: *Oscillator, freq: f32) void {
-        self.frequency = freq;
-        self.is_playing = true;
-        self.envelope.trigger();
-    }
-
-    pub fn noteOff(self: *Oscillator) void {
-        self.is_playing = false;
-        self.envelope.release();
-    }
-
-    pub fn getSample(self: *Oscillator) f32 {
-        var sample: f32 = undefined;
-
-        switch (self.waveform) {
-            .sine => {
-                sample = @sin(self.phase * TWO_PI);
-            },
-            .square => {
-                sample = if (self.phase < 0.5) 1.0 else -1.0;
-            },
-            .sawtooth => {
-                sample = (2.0 * self.phase) - 1.0;
-            },
-            .triangle => {
-                if (self.phase < 0.5) {
-                    sample = 4.0 * self.phase - 1.0;
-                } else {
-                    sample = 3.0 - 4.0 * self.phase;
-                }
-            },
-        }
-
-        // Increment phase (0.0 to 1.0 range)
-        self.phase += self.frequency * SAMPLE_DURATION;
-        // Wrap phase precisely between 0 and 1
-        self.phase = self.phase - @floor(self.phase);
-
-        // Multiple by our envelope to get correct amplitude
-        return sample * self.envelope.process();
-    }
+var osc2_volume_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 2,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.7,
+    .label = "Vol 2",
 };
 
-fn PolyOscillator(comptime voice_count: comptime_int) type {
-    return struct {
-        oscillators: [voice_count]Oscillator = undefined,
-        next_voice: usize = 0,
+var osc3_waveform_switch = gui.WaveformSelector{
+    .x = BASE_X / 2,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .width = 120,
+    .height = 40,
+    .value = .sine,
+    .label = "OSC 3",
+};
 
-        pub fn initOSC(self: *@This()) void {
-            self.oscillators = [_]Oscillator{Oscillator{
-                .frequency = 0,
-                .phase = 0,
-                .waveform = .sine,
-            }} ** voice_count;
-        }
+var osc3_semitone_knob = gui.Knob{
+    .x = BASE_X + 140,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Semi 3",
+};
 
-        pub fn noteOn(self: *@This(), voice: usize, frequency: f32) void {
-            if (voice < voice_count) {
-                self.oscillators[voice].noteOn(frequency);
-            }
-        }
+var osc3_fine_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Fine 3",
+};
 
-        pub fn noteOff(self: *@This(), voice: usize) void {
-            if (voice < voice_count) {
-                self.oscillators[voice].noteOff();
-            }
-        }
-
-        pub fn findVoice(self: *@This()) usize {
-            // First try to find an idle voice (envelope completely finished)
-            for (self.oscillators, 0..) |osc, i| {
-                if (osc.envelope.stage == .idle) return i;
-            }
-            // If no completely idle voices, look for ones that aren't actively playing
-            for (self.oscillators, 0..) |osc, i| {
-                if (!osc.is_playing) return i;
-            }
-            // If all voices are active, use round-robin
-            const voice = self.next_voice;
-            self.next_voice = (self.next_voice + 1) % voice_count;
-            return voice;
-        }
-
-        // Add method to change waveform
-        pub fn setWaveform(self: *@This(), voice: usize, waveform: WaveForm) void {
-            if (voice < voice_count) {
-                self.oscillators[voice].waveform = waveform;
-            }
-        }
-
-        pub fn setAllWaveforms(self: *@This(), waveform: WaveForm) void {
-            for (&self.oscillators) |*oscillator| {
-                oscillator.waveform = waveform;
-            }
-        }
-
-        pub fn setFrequencies(self: *@This(), pitches: [voice_count]f32) void {
-            for (&self.oscillators, pitches) |*oscillator, pitch| {
-                oscillator.frequency = pitch;
-            }
-        }
-
-        pub fn getFrequencies(self: *@This()) [voice_count]f32 {
-            var frequencies: [voice_count]f32 = undefined;
-            for (&self.oscillators, 0..) |*oscillator, i| {
-                frequencies[i] = oscillator.frequency;
-            }
-            return frequencies;
-        }
-
-        pub fn setFrequency(self: *@This(), voice: usize, frequency: f32) void {
-            if (voice < voice_count) {
-                self.oscillators[voice].frequency = frequency;
-            }
-        }
-
-        pub fn adjustFrequencies(self: *@This(), delta: f32) void {
-            for (&self.oscillators) |*oscillator| {
-                oscillator.frequency = @max(0, oscillator.frequency + delta);
-            }
-        }
-
-        pub fn adjustFrequency(self: *@This(), voice: usize, delta: f32) void {
-            if (voice < voice_count) {
-                self.oscillators[voice].frequency = @max(0, self.oscillators[voice].frequency + delta);
-            }
-        }
-
-        pub fn getSample(self: *@This()) f32 {
-            var sample: f32 = 0;
-            for (&self.oscillators) |*oscillator| {
-                sample += oscillator.getSample();
-            }
-            return sample / @as(f32, @floatFromInt(voice_count)); // Normalize the output
-        }
-    };
-}
+var osc3_volume_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 2,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.7,
+    .label = "Vol 3",
+};
 
 var attack_knob = gui.Knob{
-    .x = 50,
-    .y = 100,
-    .radius = 20,
+    .x = BASE_X + KNOB_GROUP_SPACING * 4,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
     .value = 0.1,
     .label = "Attack",
 };
 
 var decay_knob = gui.Knob{
-    .x = 150,
-    .y = 100,
-    .radius = 20,
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
     .value = 0.1,
     .label = "Decay",
 };
 
 var sustain_knob = gui.Knob{
-    .x = 250,
-    .y = 100,
-    .radius = 20,
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 2,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
     .value = 0.7,
     .label = "Sustain",
 };
 
 var release_knob = gui.Knob{
-    .x = 350,
-    .y = 100,
-    .radius = 20,
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 3,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
     .value = 0.2,
     .label = "Release",
+};
+
+var cutoff_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Cutoff",
+};
+
+var resonance_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Res",
+};
+
+var filter_env_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 2,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "F.Amount",
+};
+
+var master_gain_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 3,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Gain",
+};
+
+var filter_attack_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.1,
+    .label = "F.Attack",
+};
+
+var filter_decay_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.1,
+    .label = "F.Decay",
+};
+
+var filter_sustain_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 2,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "F.Sustain",
+};
+
+var filter_release_knob = gui.Knob{
+    .x = BASE_X + KNOB_GROUP_SPACING * 4 + KNOB_SPACING_X * 3,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.2,
+    .label = "F.Release",
+};
+
+var osc1_pan_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 3,
+    .y = BASE_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Pan 1",
+};
+
+var osc2_pan_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 3,
+    .y = BASE_Y + OSC_SPACING_Y,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Pan 2",
+};
+
+var osc3_pan_knob = gui.Knob{
+    .x = BASE_X + 140 + KNOB_SPACING_X * 3,
+    .y = BASE_Y + OSC_SPACING_Y * 2,
+    .radius = KNOB_RADIUS,
+    .value = 0.5,
+    .label = "Pan 3",
 };
 
 fn audioInputCallback(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     var samples: [*]f32 = @alignCast(@ptrCast(buffer.?));
 
     var i: c_uint = 0;
-    while (i < frames) : (i += 1) {
-        samples[i] = global_poly.getSample() * 0.5; // 0.5 for amplitude scaling
+    while (i < frames * 2) : (i += 2) {
+        const osc1_sample = osc1_poly.getSample() * osc1_volume_knob.value;
+        const osc2_sample = osc2_poly.getSample() * osc2_volume_knob.value;
+        const osc3_sample = osc3_poly.getSample() * osc3_volume_knob.value;
+
+        const osc1_pan = osc1_pan_knob.value;
+        const osc2_pan = osc2_pan_knob.value;
+        const osc3_pan = osc3_pan_knob.value;
+
+        const osc1_left = osc1_sample * @sin((1.0 - osc1_pan) * std.math.pi / 2.0);
+        const osc1_right = osc1_sample * @sin(osc1_pan * std.math.pi / 2.0);
+        const osc2_left = osc2_sample * @sin((1.0 - osc2_pan) * std.math.pi / 2.0);
+        const osc2_right = osc2_sample * @sin(osc2_pan * std.math.pi / 2.0);
+        const osc3_left = osc3_sample * @sin((1.0 - osc3_pan) * std.math.pi / 2.0);
+        const osc3_right = osc3_sample * @sin(osc3_pan * std.math.pi / 2.0);
+
+        const left = (osc1_left + osc2_left + osc3_left) / 3.0;
+        const right = (osc1_right + osc2_right + osc3_right) / 3.0;
+
+        samples[i] = left * master_gain_knob.value * 2.0;
+        samples[i + 1] = right * master_gain_knob.value * 2.0;
     }
 }
-const NUMBER_OF_VOICES = 4;
-const Poly4 = PolyOscillator(NUMBER_OF_VOICES); // 4-voice polyphonic oscillator
 
-var global_poly = Poly4{};
+const NUMBER_OF_VOICES = 8;
+const Poly = oscillators.PolyOscillator(NUMBER_OF_VOICES);
+
+var osc1_poly = Poly{};
+var osc2_poly = Poly{};
+var osc3_poly = Poly{};
 
 pub fn main() void {
-    rl.initWindow(640, 480, "SYNTH");
+    rl.initWindow(1120, 340, "SYNTH");
+    rl.setConfigFlags(.{ .msaa_4x_hint = true });
     defer rl.closeWindow();
-
+    rl.setTargetFPS(60);
     rl.initAudioDevice();
     defer rl.closeAudioDevice();
 
-    rl.setTargetFPS(60);
-
-    // Create audio stream
-    const stream = rl.loadAudioStream(SAMPLE_RATE, 32, 1); // 32-bit float, mono
+    const stream = rl.loadAudioStream(SAMPLE_RATE, 32, 2); // 32-bit float, mono
     defer rl.unloadAudioStream(stream);
 
-    // Callback function for our audio
     rl.setAudioStreamCallback(stream, audioInputCallback);
     rl.playAudioStream(stream);
 
-    global_poly.initOSC();
-    var next_voice: usize = 0; // For round-robin voice allocation
+    osc1_poly.initOSC();
+    osc2_poly.initOSC();
+    osc3_poly.initOSC();
 
-    // Which key is assigned to which voice
-    var key_voice_map: [256]?usize = .{null} ** 256;
+    var key_voice_map1: [256]?usize = .{null} ** 256;
+    var key_voice_map2: [256]?usize = .{null} ** 256;
+    var key_voice_map3: [256]?usize = .{null} ** 256;
 
-    // Main loop
     while (!rl.windowShouldClose()) {
-        // Handle note input
+
+        // Note input
         for (NOTE_KEYS) |key| {
             const key_idx = @as(usize, @intCast(@intFromEnum(key)));
 
             if (rl.isKeyPressed(key)) {
                 if (getKeyNote(key)) |note_idx| {
-                    const voice = global_poly.findVoice();
-                    global_poly.noteOn(voice, NOTE_FREQUENCIES[note_idx]);
-                    key_voice_map[key_idx] = voice;
-                    next_voice = (voice + 1) % NUMBER_OF_VOICES;
+                    const freq = NOTE_FREQUENCIES[note_idx];
+
+                    const voice1 = osc1_poly.findVoice();
+                    const voice2 = osc2_poly.findVoice();
+                    const voice3 = osc3_poly.findVoice();
+
+                    osc1_poly.noteOn(voice1, freq);
+                    osc2_poly.noteOn(voice2, freq);
+                    osc3_poly.noteOn(voice3, freq);
+
+                    key_voice_map1[key_idx] = voice1;
+                    key_voice_map2[key_idx] = voice2;
+                    key_voice_map3[key_idx] = voice3;
                 }
             } else if (rl.isKeyReleased(key)) {
-                if (key_voice_map[key_idx]) |voice| {
-                    global_poly.noteOff(voice);
-                    key_voice_map[key_idx] = null;
+                if (key_voice_map1[key_idx]) |voice| {
+                    osc1_poly.noteOff(voice);
+                    key_voice_map1[key_idx] = null;
                 }
-            }
-        }
-        // Handle waveform changes
-        for (WAVEFORM_KEYS) |control| {
-            if (rl.isKeyPressed(control.key)) {
-                global_poly.setAllWaveforms(control.waveform);
+                if (key_voice_map2[key_idx]) |voice| {
+                    osc2_poly.noteOff(voice);
+                    key_voice_map2[key_idx] = null;
+                }
+                if (key_voice_map3[key_idx]) |voice| {
+                    osc3_poly.noteOff(voice);
+                    key_voice_map3[key_idx] = null;
+                }
             }
         }
 
@@ -384,24 +345,107 @@ pub fn main() void {
         decay_knob.update();
         sustain_knob.update();
         release_knob.update();
+        cutoff_knob.update();
+        resonance_knob.update();
+        filter_attack_knob.update();
+        filter_decay_knob.update();
+        filter_sustain_knob.update();
+        filter_release_knob.update();
+        filter_env_knob.update();
+        osc1_waveform_switch.update();
+        osc1_semitone_knob.update();
+        osc1_fine_knob.update();
+        osc2_waveform_switch.update();
+        osc2_semitone_knob.update();
+        osc2_fine_knob.update();
+        osc3_waveform_switch.update();
+        osc3_semitone_knob.update();
+        osc3_fine_knob.update();
+        master_gain_knob.update();
+        osc1_volume_knob.update();
+        osc2_volume_knob.update();
+        osc3_volume_knob.update();
+        osc1_pan_knob.update();
+        osc2_pan_knob.update();
+        osc3_pan_knob.update();
 
-        // Update envelope parameters
-        for (&global_poly.oscillators) |*osc| {
-            osc.envelope.attack_time = attack_knob.value * 2.0; // 0-2 seconds
-            osc.envelope.decay_time = decay_knob.value * 1.0; // 0-1 seconds
-            osc.envelope.sustain_level = sustain_knob.value; // 0-1
-            osc.envelope.release_time = release_knob.value * 3.0; // 0-3 seconds
-        }
+        // Update synth
+        osc1_poly.setWaveform(osc1_waveform_switch.value);
+        osc1_poly.setSemitone(osc1_semitone_knob.value);
+        osc1_poly.setFine(osc1_fine_knob.value);
+        osc1_poly.setAttack(attack_knob.value);
+        osc1_poly.setDecay(decay_knob.value);
+        osc1_poly.setSustain(sustain_knob.value);
+        osc1_poly.setRelease(release_knob.value);
+        osc1_poly.setFilterCutoff(cutoff_knob.value);
+        osc1_poly.setFilterResonance(resonance_knob.value);
+        osc1_poly.setFilterEnv(filter_env_knob.value);
+        osc1_poly.setFilterAttack(filter_attack_knob.value);
+        osc1_poly.setFilterDecay(filter_decay_knob.value);
+        osc1_poly.setFilterSustain(filter_sustain_knob.value);
+        osc1_poly.setFilterRelease(filter_release_knob.value);
 
+        osc2_poly.setWaveform(osc2_waveform_switch.value);
+        osc2_poly.setSemitone(osc2_semitone_knob.value);
+        osc2_poly.setFine(osc2_fine_knob.value);
+        osc2_poly.setAttack(attack_knob.value);
+        osc2_poly.setDecay(decay_knob.value);
+        osc2_poly.setSustain(sustain_knob.value);
+        osc2_poly.setRelease(release_knob.value);
+        osc2_poly.setFilterCutoff(cutoff_knob.value);
+        osc2_poly.setFilterResonance(resonance_knob.value);
+        osc2_poly.setFilterEnv(filter_env_knob.value);
+        osc2_poly.setFilterAttack(filter_attack_knob.value);
+        osc2_poly.setFilterDecay(filter_decay_knob.value);
+        osc2_poly.setFilterSustain(filter_sustain_knob.value);
+        osc2_poly.setFilterRelease(filter_release_knob.value);
+
+        osc3_poly.setWaveform(osc3_waveform_switch.value);
+        osc3_poly.setSemitone(osc3_semitone_knob.value);
+        osc3_poly.setFine(osc3_fine_knob.value);
+        osc3_poly.setAttack(attack_knob.value);
+        osc3_poly.setDecay(decay_knob.value);
+        osc3_poly.setSustain(sustain_knob.value);
+        osc3_poly.setRelease(release_knob.value);
+        osc3_poly.setFilterCutoff(cutoff_knob.value);
+        osc3_poly.setFilterResonance(resonance_knob.value);
+        osc3_poly.setFilterEnv(filter_env_knob.value);
+        osc3_poly.setFilterAttack(filter_attack_knob.value);
+        osc3_poly.setFilterDecay(filter_decay_knob.value);
+        osc3_poly.setFilterSustain(filter_sustain_knob.value);
+        osc3_poly.setFilterRelease(filter_release_knob.value);
+
+        // Draw stuff
         rl.beginDrawing();
         defer rl.endDrawing();
-
         rl.clearBackground(rl.Color.black);
 
-        // Draw controls
         attack_knob.draw();
         decay_knob.draw();
         sustain_knob.draw();
         release_knob.draw();
+        cutoff_knob.draw();
+        resonance_knob.draw();
+        filter_attack_knob.draw();
+        filter_decay_knob.draw();
+        filter_sustain_knob.draw();
+        filter_release_knob.draw();
+        filter_env_knob.draw();
+        osc1_waveform_switch.draw();
+        osc1_semitone_knob.draw();
+        osc1_fine_knob.draw();
+        osc2_waveform_switch.draw();
+        osc2_semitone_knob.draw();
+        osc2_fine_knob.draw();
+        osc3_waveform_switch.draw();
+        osc3_semitone_knob.draw();
+        osc3_fine_knob.draw();
+        master_gain_knob.draw();
+        osc1_volume_knob.draw();
+        osc2_volume_knob.draw();
+        osc3_volume_knob.draw();
+        osc3_pan_knob.draw();
+        osc1_pan_knob.draw();
+        osc2_pan_knob.draw();
     }
 }

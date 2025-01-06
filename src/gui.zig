@@ -1,6 +1,8 @@
 const std = @import("std");
 const rl = @import("raylib");
 const math = std.math;
+const data = @import("data.zig");
+const WaveForm = data.WaveForm;
 
 pub const Knob = struct {
     x: i32,
@@ -16,8 +18,7 @@ pub const Knob = struct {
         rl.drawCircle(self.x, self.y, @as(f32, @floatFromInt(self.radius)), rl.Color.gray);
 
         // Draw indicator line
-        // Changed angle calculation: -45 to 225 degrees (rotated 90° counterclockwise)
-        const angle = self.value * 270.0 - 225.0; // Changed from -135.0
+        const angle = self.value * 270.0 - 225.0;
         const rad_angle = angle * math.pi / 180.0;
         const line_end_x = self.x + @as(i32, @intFromFloat(@cos(rad_angle) * @as(f32, @floatFromInt(self.radius))));
         const line_end_y = self.y + @as(i32, @intFromFloat(@sin(rad_angle) * @as(f32, @floatFromInt(self.radius))));
@@ -53,34 +54,54 @@ pub const Knob = struct {
     }
 };
 
-// pub const Switch = struct {
-//     x: i32,
-//     y: i32,
-//     width: i32,
-//     height: i32,
-//     is_on: bool = false,
-//     label: []const u8,
+pub const WaveformSelector = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    value: WaveForm,
+    label: [*:0]const u8,
+    is_hovered: bool = false,
 
-//     pub fn draw(self: *Switch) void {
-//         const color = if (self.is_on) rl.Color.green else rl.Color.darkGray;
-//         rl.drawRectangle(self.x, self.y, self.width, self.height, color);
+    pub fn draw(self: *WaveformSelector) void {
+        // Draw background with hover effect
+        const bg_color = if (self.is_hovered)
+            rl.Color.dark_gray
+        else
+            rl.Color{ .r = 40, .g = 40, .b = 40, .a = 255 };
+        rl.drawRectangle(self.x, self.y, self.width, self.height, bg_color);
 
-//         // Draw label
-//         const text_width = rl.measureText(self.label, 20);
-//         rl.drawText(self.label, self.x + @divFloor(self.width - text_width, 2), self.y + self.height + 5, 20, rl.Color.white);
-//     }
+        rl.drawRectangleLines(self.x, self.y, self.width, self.height, rl.Color.gray);
 
-//     pub fn update(self: *Switch) void {
-//         const mouse_pos = rl.getMousePosition();
-//         const mouse_x = @as(i32, @intFromFloat(mouse_pos.x));
-//         const mouse_y = @as(i32, @intFromFloat(mouse_pos.y));
+        // Draw label above
+        const label_width = rl.measureText(self.label, 20);
+        rl.drawText(self.label, self.x + @divFloor(self.width - label_width, 2), self.y - 25, 20, rl.Color.white);
 
-//         if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
-//             if (mouse_x >= self.x and mouse_x <= self.x + self.width and
-//                 mouse_y >= self.y and mouse_y <= self.y + self.height)
-//             {
-//                 self.is_on = !self.is_on;
-//             }
-//         }
-//     }
-// };
+        // Draw waveform name
+        const text = @tagName(self.value);
+        const text_width = rl.measureText(text.ptr, 20);
+        rl.drawText(text.ptr, self.x + @divFloor(self.width - text_width, 2), self.y + @divFloor(self.height - 20, 2), 20, rl.Color.white);
+    }
+
+    pub fn update(self: *WaveformSelector) void {
+        const mouse_pos = rl.getMousePosition();
+        const mouse_x = @as(i32, @intFromFloat(mouse_pos.x));
+        const mouse_y = @as(i32, @intFromFloat(mouse_pos.y));
+
+        // Update hover state
+        self.is_hovered = (mouse_x >= self.x and
+            mouse_x <= self.x + self.width and
+            mouse_y >= self.y and
+            mouse_y <= self.y + self.height);
+
+        if (self.is_hovered and rl.isMouseButtonPressed(rl.MouseButton.left)) {
+            // Cycle through waveforms
+            self.value = switch (self.value) {
+                .sine => .square,
+                .square => .sawtooth,
+                .sawtooth => .triangle,
+                .triangle => .sine,
+            };
+        }
+    }
+};
